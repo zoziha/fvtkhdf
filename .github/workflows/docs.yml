@@ -25,7 +25,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y gfortran cmake python3-pip libhdf5-dev
-          pip3 install fypp sphinx sphinx-rtd-theme
+          pip3 install fypp sphinx furo
 
       - name: Configure CMake
         run: |
