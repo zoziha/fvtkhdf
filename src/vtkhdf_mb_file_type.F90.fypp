@@ -245,10 +245,10 @@ contains
   end subroutine create_impl
 
 
-  subroutine add_block(this, name, stat, errmsg, is_temporal)
+  subroutine add_block(this, block_name, stat, errmsg, is_temporal)
 
     class(vtkhdf_mb_file), intent(inout) :: this
-    character(*), intent(in) :: name
+    character(*), intent(in) :: block_name
     integer, intent(out) :: stat
     character(:), allocatable, intent(out) :: errmsg
     logical, intent(in), optional :: is_temporal
@@ -261,20 +261,20 @@ contains
     INSIST(this%file_id >= 0)
 
     !! Ensure the specified NAME is valid
-    if (name == '') then
+    if (block_name == '') then
       stat = 1
       errmsg = 'invalid empty block name'
       return
     end if
 
-    n = scan(name, './')
+    n = scan(block_name, './')
     if (n /= 0) then
       stat = 1
-      errmsg = 'invalid character "' // name(n:n) // '" in block name'
+      errmsg = 'invalid character "' // block_name(n:n) // '" in block name'
       return
     end if
 
-    if (name == 'Assembly') then
+    if (block_name == 'Assembly') then
       stat = 1
       errmsg = 'invalid block name "Assembly"'
       return
@@ -282,9 +282,9 @@ contains
 
     b => this%blocks
     do while (associated(b))
-      if (b%name == name) then
+      if (b%name == block_name) then
         stat = 1
-        errmsg = 'block "' // name // '" already defined'
+        errmsg = 'block "' // block_name // '" already defined'
         return
       end if
       b => b%next
@@ -301,20 +301,20 @@ contains
 
     !! Create the UG block group and its HDF5 hierarchy
     allocate(new)
-    new%name = name
+    new%name = block_name
     new%next => this%blocks
     this%blocks => new
 
     call err_ctx%capture ! begin HDF5 calls
 
-    call new%b%init(this%vtk_id, name, this%ctx, is_temporal)
+    call new%b%init(this%vtk_id, block_name, this%ctx, is_temporal)
 
     !NB: Unused for MultiBlockDataSet, but required for PartitionedDataSetCollection.
     call h5_write_attr(this%ctx, new%b%root_id, 'Index', this%next_bid)
     this%next_bid = this%next_bid + 1
 
     !! Create a softlink in Assembly group to the block group.
-    ierr = H5Lcreate_soft('/VTKHDF/'//name, this%ass_id, name)
+    ierr = H5Lcreate_soft('/VTKHDF/'//block_name, this%ass_id, block_name)
     INSIST(this%ctx%global_all(ierr >= 0))
 
     stat = 0
@@ -323,27 +323,28 @@ contains
   end subroutine add_block
 
   !! Write the UnstructuredGrid data for the specified block. The unstructured
-  !! mesh is described in the conventional manner by the X, CNODE, and XCNODE
-  !! arrays. The additional array TYPES specifies the VTK cell types. This
-  !! procedure must be called for each of the blocks before any of the
+  !! mesh is described in the conventional manner by the POINTS, CNODE, and
+  !! XCNODE arrays. The additional array TYPES specifies the VTK cell types.
+  !! This procedure must be called for each of the blocks before any of the
   !! following procedures.
 #:for r in real_specs
 #:for i in int_specs
 
-  subroutine write_mesh_${r["kind"]}$_${i["kind"]}$(this, block_name, x, cnode, xcnode, types)
+  subroutine write_mesh_${r["kind"]}$_${i["kind"]}$(this, block_name, points, cnode, xcnode, types)
 
     class(vtkhdf_mb_file), intent(inout) :: this
     character(*), intent(in) :: block_name
-    ${r["decl"]}$, intent(in) :: x(:,:)
+    ${r["decl"]}$, intent(in) :: points(:,:)
     ${i["decl"]}$, intent(in) :: cnode(:), xcnode(:)
     integer(int8), intent(in) :: types(:)
 
     type(vtkhdf_ug), pointer :: bptr
     type(vtkhdf_h5e_context) :: err_ctx
 
+    INSIST(size(points,dim=1) == 3)
     call err_ctx%capture
     call this%get_block_ptr(block_name, bptr)
-    call bptr%write_mesh(x, cnode, xcnode, types)
+    call bptr%write_mesh(points, cnode, xcnode, types)
     call err_ctx%restore(0)
 
   end subroutine write_mesh_${r["kind"]}$_${i["kind"]}$
@@ -373,13 +374,23 @@ contains
 #:endfor
 #:endfor
 
-  !! Register the specified NAME as a time-dependent cell/point dataset for
-  !! the specified mesh block. This writes no data, but only configures some
-  !! necessary internal metadata. The MOLD array argument shall have the same
-  !! type, kind, and rank as the actual dataset, and the same extent in all
-  !! but the last dimension, whose extent is ignored, but the array values
-  !! themselves are not accessed. Scalar, vector, and tensor-valued mesh
-  !! data are supported (rank-1, 2, and 3 MOLD).
+  !! Register NAME as a time-dependent Cell/PointData dataset for the specified
+  !! mesh block. This prepares the file to receive cell/point-centered data at
+  !! each time step but performs no actual data write.
+  !!
+  !! MOLD determines the dataset's fixed leading dimensions:
+  !! - For scalar-valued cell data: MOLD is a scalar;
+  !! - For vector-valued cell data: MOLD is a 1D array whose size equals the
+  !!   number of components.
+  !!
+  !! The type and kind of MOLD determine the dataset type in the file.
+  !! While the values in MOLD are ignored, its characteristics must be
+  !! identical across all MPI ranks.
+  !!
+  !! The type and kind of MOLD defines the HDF5 datatype, and its value is
+  !! ignored. The last dimension of written data will correspond to the mesh
+  !! entity, making it the extendable (slowest-varying) dimension of the
+  !! dataset. All MPI ranks must provide identical MOLD characteristics.
 #:for loc in locations
 #:for s in num_specs
 #:for d in data_specs

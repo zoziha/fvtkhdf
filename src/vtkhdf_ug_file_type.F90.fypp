@@ -194,20 +194,21 @@ contains
   end subroutine create_impl
 
   !! Write the unstructured mesh to the file. The mesh is described in the
-  !! conventional manner by the X, CNODE, and XCNODE arrays. The additional
-  !! array TYPES specifies the VTK cell types. This procedure must be called
-  !! before any of the following procedures.
+  !! conventional manner by the POINTS, CNODE, and XCNODE arrays. The
+  !! additional array TYPES specifies the VTK cell types. This procedure
+  !! must be called before any of the following procedures.
 #:for r in real_specs
 #:for i in int_specs
 
-  subroutine write_mesh_${r["kind"]}$_${i["kind"]}$(this, x, cnode, xcnode, types)
+  subroutine write_mesh_${r["kind"]}$_${i["kind"]}$(this, points, cnode, xcnode, types)
     class(vtkhdf_ug_file), intent(inout) :: this
-    ${r["decl"]}$, intent(in) :: x(:,:)
+    ${r["decl"]}$, intent(in) :: points(:,:)
     ${i["decl"]}$, intent(in) :: cnode(:), xcnode(:)
     integer(int8), intent(in) :: types(:)
+    INSIST(size(points,dim=1) == 3)
     type(vtkhdf_h5e_context) :: err_ctx
     call err_ctx%capture
-    call this%ug%write_mesh(x, cnode, xcnode, types)
+    call this%ug%write_mesh(points, cnode, xcnode, types)
     call err_ctx%restore(0)
   end subroutine
 #:endfor
@@ -233,21 +234,23 @@ contains
 #:endfor
 #:endfor
 
-  !! Register NAME as a time-dependent PointData dataset for the VTKHDF file.
-  !! This prepares the file to receive point-based data at each time step
-  !! but performs no actual data write.
+  !! Register NAME as a time-dependent Cell/PointData dataset. This prepares
+  !! the file to receive cell/point-centered data at each time step but
+  !! performs no actual data write.
   !!
-  !! The MOLD argument defines the nature of the point-based data:
-  !! - For scalar-valued data: MOLD is a scalar (e.g., a single real value);
-  !! - For vector-valued data: MOLD is a 1D array where size equals the number
-  !!   of components (e.g., size 3 for velocity).
+  !! MOLD determines the dataset's fixed leading dimensions:
+  !! - For scalar-valued cell data: MOLD is a scalar;
+  !! - For vector-valued cell data: MOLD is a 1D array whose size equals the
+  !!   number of components.
   !!
-  !! The type and kind of MOLD determine the field's data type in the file.
+  !! The type and kind of MOLD determine the dataset type in the file.
   !! While the values in MOLD are ignored, its characteristics must be
   !! identical across all MPI ranks.
   !!
-  !! Subsequent writes to this field assume the last (or only) dimension
-  !! of the data array corresponds to the point index.
+  !! The type and kind of MOLD defines the HDF5 datatype, and its value is
+  !! ignored. The last dimension of written data will correspond to the mesh
+  !! entity, making it the extendable (slowest-varying) dimension of the
+  !! dataset. All MPI ranks must provide identical MOLD characteristics.
 #:for loc in locations
 #:for s in num_specs
 #:for r in data_specs

@@ -194,9 +194,9 @@ contains
   end subroutine init
 
   !! Write the unstructured mesh to the file. The mesh is described in the
-  !! conventional manner by the X, CNODE, and XCNODE arrays. The additional
-  !! array TYPES specifies the VTK cell types. This procedure must be called
-  !! before any of the following procedures.
+  !! conventional manner by the POINTS, CNODE, and XCNODE arrays. The
+  !! additional array TYPES specifies the VTK cell types. This procedure
+  !! must be called before any of the following procedures.
 
   !! NB: Paraview and/or the VTKHDF reader currently has a problem handling
   !! 0-sized parts (see https://gitlab.kitware.com/vtk/vtk/-/issues/19923).
@@ -207,10 +207,10 @@ contains
 #:for r in real_specs
 #:for i in int_specs
 
-  subroutine write_mesh_${r["kind"]}$_${i["kind"]}$(this, x, cnode, xcnode, types)
+  subroutine write_mesh_${r["kind"]}$_${i["kind"]}$(this, points, cnode, xcnode, types)
 
     class(vtkhdf_ug), intent(inout) :: this
-    ${r["decl"]}$, intent(in) :: x(:,:)
+    ${r["decl"]}$, intent(in) :: points(:,:)
     ${i["decl"]}$, intent(in) :: cnode(:), xcnode(:)
     integer(int8), intent(in) :: types(:)
 
@@ -219,7 +219,8 @@ contains
 
     INSIST(this%root_id >= 0)
 
-    this%nnode = size(x, dim=2, kind=int64)
+    INSIST(size(points,dim=1) == 3)
+    this%nnode = size(points, dim=2, kind=int64)
     this%ncell = size(types, kind=int64)
 
     INSIST(size(xcnode, kind=int64) == this%ncell+1)
@@ -276,7 +277,7 @@ contains
 #endif
 
     call h5_write_dataset(this%ctx, this%root_id, 'Types', types)
-    call h5_write_dataset(this%ctx, this%root_id, 'Points', x)
+    call h5_write_dataset(this%ctx, this%root_id, 'Points', points)
 
   end subroutine write_mesh_${r["kind"]}$_${i["kind"]}$
 
@@ -318,20 +319,9 @@ contains
   end subroutine
 #:endfor
 
-  !! Register NAME as a time-dependent CellData group dataset. This writes
-  !! no data, but configures a new extendable HDF5 dataset for future writing.
-  !!
-  !! The rank-1 array MOLD determines the dataset's fixed leading dimensions:
-  !! - For scalar-valued point data: MOLD has size 0;
-  !! - For vector-valued point data: MOLD size equals the number of components.
-  !!
-  !! The type and kind of MOLD defines the HDF5 datatype, and its value is
-  !! ignored. The last dimension of written data will correspond to the cell
-  !! index, making it the extendable (slowest-varying) dimension of the dataset.
-  !! All MPI ranks must provide identical MOLD characteristics.
-
-  !! Register NAME as a time-dependent CellData group dataset. This writes
-  !! no data, but configures a new extendable HDF5 dataset for future writing.
+  !! Register NAME as a time-dependent Cell/PointData group dataset. This
+  !! writes no data, but configures a new extendable HDF5 dataset for future
+  !! writing.
   !!
   !! MOLD determines the dataset's fixed leading dimensions:
   !! - For scalar-valued cell data: MOLD is a scalar;
@@ -339,9 +329,9 @@ contains
   !!   number of components.
   !!
   !! The type and kind of MOLD defines the HDF5 datatype, and its value is
-  !! ignored. The last dimension of written data will correspond to the cell
-  !! index, making it the extendable (slowest-varying) dimension of the dataset.
-  !! All MPI ranks must provide identical MOLD characteristics.
+  !! ignored. The last dimension of written data will correspond to the mesh
+  !! entity, making it the extendable (slowest-varying) dimension of the
+  !! dataset. All MPI ranks must provide identical MOLD characteristics.
 #:for s in num_specs
 
   subroutine register_temporal_cell_data_${s["kind"]}$(this, name, mold)
