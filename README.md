@@ -13,7 +13,7 @@ mechanism, **fVTKHDF** provides a more scalable alternative to older VTK
 ASCII or XML formats.
 
 * Targets version 2.5 of the [VTKHDF File Format Specification](https://docs.vtk.org/en/latest/vtk_file_formats/vtkhdf_file_format/index.html).
-* Paraview 5.13+ recommended for full support of the generated files.
+* ParaView 5.13+ recommended for full support of the generated files.
 
 **Dataset Support**
 
@@ -74,10 +74,11 @@ target_link_libraries(my_simulation PRIVATE fVTKHDF::fvtkhdf)
 ```
 
 ## Quick Start
-Here is a minimal serial example that writes a VTKHDF UstructuredGrid dataset
-for an unstructured mesh consisting of a single tetrahedral cell with a scalar
-field. More complete examples (serial and MPI-parallel, UnstructuredGrid and
-MultiBlockDataSet) are provided in the `examples` directory.
+Here is a minimal serial example that writes a **VTKHDF** UnstructuredGrid
+dataset for an unstructured mesh consisting of a single tetrahedral cell
+with a scalar field. More complete examples (serial and MPI-parallel,
+UnstructuredGrid and MultiBlockDataSet) are provided in the `examples`
+directory.
 
 ```fortran
 program quick_start
