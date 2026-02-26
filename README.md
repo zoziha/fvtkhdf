@@ -122,6 +122,43 @@ program quick_start
 end program quick_start
 ```
 
+
+## Development Roadmap
+Planned and prospective features include:
+
+* Completing UnstructuredGrid (UG) feature coverage
+
+  - Add support for `FieldData` datasets (data NOT associated with mesh entities)
+    ([issue #24](https://github.com/nncarlson/fvtkhdf/issues/24))
+  - Add support for temporal mesh:
+    - geometry only
+    - geometry and topology
+  - Add support for [polyhedron cells](https://docs.vtk.org/en/latest/vtk_file_formats/vtkhdf_file_format/vtkhdf_specifications.html#polyhedron-support)
+
+* Composite VTK datasets
+  - Replace MB with PartitionedDataSetCollection (PDC) ([issue #26](https://github.com/nncarlson/fvtkhdf/issues/26))
+  - Implement a general `Assembly` tree for PDC to replace the existing flat tree.
+
+* New features added in VTKHDF version 2.6
+  - Add support for [`Attribute` data](https://docs.vtk.org/en/latest/vtk_file_formats/vtkhdf_file_format/vtkhdf_specifications.html#attribute-data)
+    on cell/point/field datasets ([issue #23](https://github.com/nncarlson/fvtkhdf/issues/23)).
+
+### Additional Dataset Types
+
+The [VTKHDF format specification](https://docs.vtk.org/en/latest/vtk_file_formats/vtkhdf_file_format/index.html)
+defines the format for additional VTK dataset types (e.g., HyperTreeGrid,
+OverlappingAMR, etc.) that are not currently supported.
+
+Contributions adding support for these formats are very welcome.
+I am happy to collaborate on design and integration so that new
+functionality fits naturally within the existing API and internal
+infrastructure.
+
+If you are interested in contributing support for one of these
+dataset types, please open an issue to discuss design and implementation
+details.
+
+
 ### License
 **fVTKHDF** is distributed under the 2-clause BSD license.
 See [LICENSE.md](./LICENSE.md) for details.
