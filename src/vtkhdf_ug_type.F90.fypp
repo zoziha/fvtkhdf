@@ -50,6 +50,7 @@ module vtkhdf_ug_type
     integer(hid_t) :: cogrp_id=H5I_INVALID_HID, pogrp_id=H5I_INVALID_HID
     type(temporal_data), pointer :: temporal_point_data => null()
     type(temporal_data), pointer :: temporal_cell_data => null()
+    type(temporal_data), pointer :: temporal_points => null()
   contains
     procedure :: init
     procedure :: close
@@ -66,10 +67,10 @@ module vtkhdf_ug_type
 #:endfor
 #:endfor
     procedure :: write_time_step
-! #:for r in real_specs
-!     generic :: write_temporal_points => write_temporal_points_${r["kind"]}$
-!     procedure, private :: write_temporal_points_${r["kind"]}$
-! #:endfor
+#:for r in real_specs
+    generic :: write_temporal_points => write_temporal_points_${r["kind"]}$
+    procedure, private :: write_temporal_points_${r["kind"]}$
+#:endfor
 #:for s in num_specs
 #:for loc in locations
     generic :: write_${loc}$_data => write_${loc}$_data_${s["kind"]}$
@@ -105,6 +106,7 @@ contains
     type(vtkhdf_ug), intent(inout) :: this
     if (associated(this%temporal_cell_data)) deallocate(this%temporal_cell_data)
     if (associated(this%temporal_point_data)) deallocate(this%temporal_point_data)
+    if (associated(this%temporal_points)) deallocate(this%temporal_points)
     this%cogrp_id = H5I_INVALID_HID
     this%pogrp_id = H5I_INVALID_HID
     this%steps_id = H5I_INVALID_HID
@@ -185,9 +187,9 @@ contains
         call h5_create_unlimited_dataset(this%ctx, this%steps_id, 'Values', mold, chunk_size)
       end associate
 
-      ! NB: Only static meshes are supported. ParaView 6.1 uses this attribute
-      ! setting to signal it should use mesh caching -- read once and reuse.
-      call h5_write_attr(this%ctx, this%steps_id, 'StaticMesh', 1)
+      ! NB: For deformed meshes, StaticMesh should be 0 to indicate the mesh changes over time
+      ! For static meshes, StaticMesh should be 1 to enable mesh caching in ParaView
+      call h5_write_attr(this%ctx, this%steps_id, 'StaticMesh', merge(0, 1, this%is_deformed))
 
       ! NB: These are no longer needed in ParaView 6.1 when StaticMesh=1, but
       ! we retain them for compatibility with earlier versions. They will be
@@ -253,15 +255,13 @@ contains
     call write_mesh_topology_impl_${r["kind"]}$_${i["kind"]}$(this, mold, cnode, xcnode, types)
 
     ! set up the temporal Points dataset
-    associate (chunk_size => int(this%nnode_tot))
-      call h5_create_unlimited_dataset(this%ctx, this%root_id, 'Points', mold, chunk_size)
-    end associate
+    call h5_create_unlimited_dataset(this%ctx, this%root_id, 'Points', mold(:, 1), int(this%nnode_tot))
 
     !! Add to list PointData datasets
     allocate (new)
     new%name = 'Points'
-    new%next => this%temporal_cell_data
-    this%temporal_cell_data => new
+    new%next => this%temporal_points
+    this%temporal_points => new
 
   end subroutine write_mesh_topology_${r["kind"]}$_${i["kind"]}$
 #:endfor
@@ -496,10 +496,10 @@ contains
     
     !! Cell and point data offsets for each of the temporal datasets for this timestep
     if (this%is_deformed) then
-      tmp => this%temporal_cell_data
+      tmp => this%temporal_points
       do while (associated(tmp))
         tmp%flag = .false.  ! dataset not yet written for this time step
-        call h5_append_to_dataset(this%ctx, this%steps_id, tmp%name, tmp%next_offset, root=0)
+        call h5_append_to_dataset(this%ctx, this%steps_id, 'PointOffsets', tmp%next_offset, root=0)
         tmp => tmp%next
       end do
     else
@@ -528,35 +528,37 @@ contains
   !! registration of NAME. The last (or only) dimension of ARRAY must
   !  correspond to the local number of points on this MPI rank.
 
-! #:for r in real_specs
+#:for r in real_specs
 
-!   subroutine write_temporal_points_${r["kind"]}$(this, points)
+  subroutine write_temporal_points_${r["kind"]}$(this, points)
 
-!     class(vtkhdf_ug), intent(in) :: this
-!     ${r["decl"]}$, intent(in) :: points(:,:)
+    class(vtkhdf_ug), intent(in) :: this
+    ${r["decl"]}$, intent(in) :: points(:,:)
 
-!     integer, allocatable :: dims(:)
-!     type(temporal_data), pointer :: dset
+    integer, allocatable :: dims(:)
+    type(temporal_data), pointer :: dset
 
-!     INSIST(this%nsteps > 0)
+    INSIST(this%nsteps > 0)
 
-!     dims = shape(points)
-!     INSIST(size(dims) >= 1 .and. size(dims) <= 3)
-!     INSIST(dims(1) == 3)
-!     INSIST(dims(size(dims)) == this%nnode)
+    dims = shape(points)
+    INSIST(size(dims) >= 1 .and. size(dims) <= 3)
+    INSIST(dims(1) == 3)
+    INSIST(dims(size(dims)) == this%nnode)
 
-!     dset => this%temporal_point_data
-!     do while (associated(dset))
-!       if (dset%name == 'Points') exit
-!       dset => dset%next
-!     end do
-!     INSIST(associated(dset))
+    dset => this%temporal_points
+    do while (associated(dset))
+      if (dset%name == 'Points') exit
+      dset => dset%next
+    end do
+    INSIST(associated(dset))
 
-!     INSIST(.not.dset%flag) ! no double writing in a single step
-!     call h5_append_to_dataset(this%ctx, this%pgrp_id, name, points)
-!     dset%next_offset = dset%next_offset + this%nnode_tot
-!     dset%flag = .true. ! dataset has been written for this step
+    INSIST(.not.dset%flag) ! no double writing in a single step
+    call h5_append_to_dataset(this%ctx, this%root_id, 'Points', points)
+    dset%next_offset = dset%next_offset + this%nnode_tot
+    dset%flag = .true. ! dataset has been written for this step
 
+  end subroutine write_temporal_points_${r["kind"]}$
+#:endfor
 
   !! Write the cell-based ARRAY to the time-dependent CellData group dataset
   !! NAME. The data is associated with the current time step. The type and

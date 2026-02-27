@@ -70,6 +70,10 @@ module vtkhdf_ug_file_type
 #:endfor
     generic :: write_time_step => write_time_step_real32, write_time_step_real64
     procedure, private :: write_time_step_real32, write_time_step_real64
+#:for r in real_specs
+    generic :: write_temporal_points => write_temporal_points_${r["kind"]}$
+    procedure, private :: write_temporal_points_${r["kind"]}$
+#:endfor
 #:for s in num_specs
 #:for loc in locations
 #:for r in data_specs
@@ -310,6 +314,20 @@ contains
     call this%ug%write_time_step(time)
     call err_ctx%restore(0)
   end subroutine write_time_step_real64
+
+  !! Write the location of the POINTS of the mesh to the time-independent PointData
+  !! group dataset NAME.
+#:for r in real_specs
+
+  subroutine write_temporal_points_${r["kind"]}$(this, points)
+    class(vtkhdf_ug_file), intent(in) :: this
+    ${r["decl"]}$, intent(in) :: points(:,:)
+    type(vtkhdf_h5e_context) :: err_ctx
+    call err_ctx%capture
+    call this%ug%write_temporal_points(points)
+    call err_ctx%restore(0)
+  end subroutine write_temporal_points_${r["kind"]}$
+#:endfor
 
   !! Write the cell/point-based data ARRAY to the named time-dependent dataset.
   !! The data is associated with the current time step.
