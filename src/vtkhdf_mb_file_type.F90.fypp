@@ -48,9 +48,8 @@ module vtkhdf_mb_file_type
     private
     type(vtkhdf_ctx) :: ctx
     integer(hid_t) :: file_id=H5I_INVALID_HID, vtk_id=H5I_INVALID_HID, ass_id=H5I_INVALID_HID
-    integer :: next_bid = 0
-    type(pdc_block), pointer :: blocks => null()
-    type(pdc_block), pointer :: last_block => null()
+    integer :: next_block_index = 0
+    type(block_item), allocatable :: blocks(:) ! a 0-indexed array
     logical :: is_temporal = .false., write_time_step_called = .false.
   contains
 #ifdef USE_MPI
@@ -83,16 +82,18 @@ module vtkhdf_mb_file_type
 #:endfor
 #:endfor
 #:endfor
-    procedure, private :: get_block_ptr
+    procedure, private :: unique_block_name
     final :: vtkhdf_mb_file_delete
   end type
 
-  type :: pdc_block
+  type :: block_item
+    type(vtkhdf_ug), allocatable :: b
     character(:), allocatable :: name
-    type(vtkhdf_ug) :: b
-    type(pdc_block), pointer :: next => null()
-  contains
-    final :: pdc_block_delete
+  end type
+
+  type, public :: vtkhdf_block_handle
+    private
+    integer :: index = -1
   end type
 
 contains
@@ -106,31 +107,19 @@ contains
 
   subroutine vtkhdf_mb_file_delete(this)
     type(vtkhdf_mb_file), intent(inout) :: this
-    if (associated(this%blocks)) deallocate(this%blocks)
     this%ass_id  = H5I_INVALID_HID
     this%vtk_id  = H5I_INVALID_HID
     this%file_id = H5I_INVALID_HID
-    this%next_bid = 0
-    this%last_block => null()
-  end subroutine
-
-  recursive subroutine pdc_block_delete(this)
-    type(pdc_block), intent(inout) :: this
-    if (associated(this%next)) deallocate(this%next)
+    this%next_block_index = 0
   end subroutine
 
   !! Cleanly closes H5 identifiers and the file, and default initializes.
   subroutine close(this)
     class(vtkhdf_mb_file), intent(inout) :: this
     integer :: ierr
-    type(pdc_block), pointer :: p
     type(vtkhdf_h5e_context) :: err_ctx
     call err_ctx%capture
-    p => this%blocks
-    do while (associated(p))
-      call p%b%close
-      p => p%next
-    end do
+    if (allocated(this%blocks)) deallocate(this%blocks)
     if (H5Iis_valid(this%ass_id) > 0) ierr = H5Gclose(this%ass_id)
     if (H5Iis_valid(this%vtk_id) > 0) ierr = H5Gclose(this%vtk_id)
     if (H5Iis_valid(this%file_id) > 0) ierr = H5Fclose(this%file_id)
@@ -244,51 +233,20 @@ contains
 
   end subroutine create_impl
 
-
-  subroutine add_block(this, block_name, stat, errmsg, is_temporal)
+  function add_block(this, name, is_temporal) result(handle)
 
     class(vtkhdf_mb_file), intent(inout) :: this
-    character(*), intent(in) :: block_name
-    integer, intent(out) :: stat
-    character(:), allocatable, intent(out) :: errmsg
+    character(*), intent(in) :: name
     logical, intent(in), optional :: is_temporal
+    type(vtkhdf_block_handle) :: handle
 
     integer :: n, ierr
-    type(pdc_block), pointer :: b, new
     type(vtkhdf_h5e_context) :: err_ctx
     logical :: temporal_flag
+    character(16) :: group_name
+    character(:), allocatable :: external_name, internal_name
 
     INSIST(this%file_id >= 0)
-
-    !! Ensure the specified NAME is valid
-    if (block_name == '') then
-      stat = 1
-      errmsg = 'invalid empty block name'
-      return
-    end if
-
-    n = scan(block_name, './')
-    if (n /= 0) then
-      stat = 1
-      errmsg = 'invalid character "' // block_name(n:n) // '" in block name'
-      return
-    end if
-
-    if (block_name == 'Assembly') then
-      stat = 1
-      errmsg = 'invalid block name "Assembly"'
-      return
-    end if
-
-    b => this%blocks
-    do while (associated(b))
-      if (b%name == block_name) then
-        stat = 1
-        errmsg = 'block "' // block_name // '" already defined'
-        return
-      end if
-      b => b%next
-    end do
 
     ! If a block is temporal, it must be added before the
     ! timeline starts to ensure step-count consistency.
@@ -299,28 +257,49 @@ contains
       this%is_temporal = .true.
     end if
 
-    !! Create the UG block group and its HDF5 hierarchy
-    allocate(new)
-    new%name = block_name
-    new%next => this%blocks
-    this%blocks => new
+    external_name = trim(name)
+    if (external_name == '') external_name = 'Unamed_Block'
+    internal_name = this%unique_block_name(sanitized_name(external_name))
+
+    !! Resize this%blocks to hold the new block
+    if (.not.allocated(this%blocks)) then
+      allocate(this%blocks(0:0))
+      allocate(this%blocks(0)%b)
+      this%blocks(0)%name = internal_name
+    else
+      block
+        integer :: j, n
+        type(block_item), allocatable :: tmp(:)
+        n = size(this%blocks)
+        allocate(tmp(0:n))
+        do j = 0, n-1
+          call move_alloc(this%blocks(j)%b, tmp(j)%b)
+        end do
+        allocate(tmp(n)%b)
+        tmp(n)%name = internal_name
+        call move_alloc(tmp, this%blocks)
+      end block
+    end if
 
     call err_ctx%capture ! begin HDF5 calls
 
-    call new%b%init(this%vtk_id, block_name, this%ctx, is_temporal)
+    !! Initialize the UG block group and its HDF5 hierarchy.
+    associate (new_block => this%blocks(this%next_block_index)%b)
+      write(group_name,'(a,i0)') 'Group_', this%next_block_index
+      call new_block%init(this%vtk_id, trim(group_name), this%ctx, is_temporal)
+      call h5_write_attr(this%ctx, new_block%root_id, 'Index', this%next_block_index)
+      call h5_write_attr(this%ctx, new_block%root_id, 'Name', external_name)
+      handle%index = this%next_block_index
+      this%next_block_index = this%next_block_index + 1
+    end associate
 
-    !NB: Unused for MultiBlockDataSet, but required for PartitionedDataSetCollection.
-    call h5_write_attr(this%ctx, new%b%root_id, 'Index', this%next_bid)
-    this%next_bid = this%next_bid + 1
-
-    !! Create a softlink in Assembly group to the block group.
-    ierr = H5Lcreate_soft('/VTKHDF/'//block_name, this%ass_id, block_name)
+    !! Create a soft link in Assembly group to the block group.
+    ierr = H5Lcreate_soft('/VTKHDF/' // group_name, this%ass_id, internal_name)
     INSIST(this%ctx%global_all(ierr >= 0))
 
-    stat = 0
-    call err_ctx%restore(stat)
+    call err_ctx%restore(0)
 
-  end subroutine add_block
+  end function add_block
 
   !! Write the UnstructuredGrid data for the specified block. The unstructured
   !! mesh is described in the conventional manner by the POINTS, CNODE, and
@@ -330,21 +309,20 @@ contains
 #:for r in real_specs
 #:for i in int_specs
 
-  subroutine write_mesh_${r["kind"]}$_${i["kind"]}$(this, block_name, points, cnode, xcnode, types)
+  subroutine write_mesh_${r["kind"]}$_${i["kind"]}$(this, b, points, cnode, xcnode, types)
 
     class(vtkhdf_mb_file), intent(inout) :: this
-    character(*), intent(in) :: block_name
+    type(vtkhdf_block_handle), intent(in) :: b
     ${r["decl"]}$, intent(in) :: points(:,:)
     ${i["decl"]}$, intent(in) :: cnode(:), xcnode(:)
     integer(int8), intent(in) :: types(:)
 
-    type(vtkhdf_ug), pointer :: bptr
     type(vtkhdf_h5e_context) :: err_ctx
 
     INSIST(size(points,dim=1) == 3)
+    INSIST(b%index >= 0 .and. b%index < this%next_block_index)
     call err_ctx%capture
-    call this%get_block_ptr(block_name, bptr)
-    call bptr%write_mesh(points, cnode, xcnode, types)
+    call this%blocks(b%index)%b%write_mesh(points, cnode, xcnode, types)
     call err_ctx%restore(0)
 
   end subroutine write_mesh_${r["kind"]}$_${i["kind"]}$
@@ -359,15 +337,15 @@ contains
 #:for s in num_specs
 #:for d in data_specs
 
-  subroutine write_${loc}$_data_${s["kind"]}$_${d["suffix"]}$(this, block_name, name, array)
+  subroutine write_${loc}$_data_${s["kind"]}$_${d["suffix"]}$(this, b, name, array)
     class(vtkhdf_mb_file), intent(inout) :: this
-    character(*), intent(in) :: block_name, name
+    type(vtkhdf_block_handle), intent(in) :: b
+    character(*), intent(in) :: name
     ${s["decl"]}$, intent(in) :: array${d["array"]}$
-    type(vtkhdf_ug), pointer :: bptr
     type(vtkhdf_h5e_context) :: err_ctx
+    INSIST(b%index >= 0 .and. b%index < this%next_block_index)
     call err_ctx%capture
-    call this%get_block_ptr(block_name, bptr)
-    call bptr%write_${loc}$_data(name, array)
+    call this%blocks(b%index)%b%write_${loc}$_data(name, array)
     call err_ctx%restore(0)
   end subroutine
 #:endfor
@@ -395,15 +373,15 @@ contains
 #:for s in num_specs
 #:for d in data_specs
 
-  subroutine register_temporal_${loc}$_data_${s["kind"]}$_${d["suffix"]}$(this, block_name, name, mold)
+  subroutine register_temporal_${loc}$_data_${s["kind"]}$_${d["suffix"]}$(this, b, name, mold)
     class(vtkhdf_mb_file), intent(inout) :: this
-    character(*), intent(in) :: block_name, name
+    type(vtkhdf_block_handle), intent(in) :: b
+    character(*), intent(in) :: name
     ${s["decl"]}$, intent(in) :: mold${d["mold"]}$
-    type(vtkhdf_ug), pointer :: bptr
     type(vtkhdf_h5e_context) :: err_ctx
+    INSIST(b%index >= 0 .and. b%index < this%next_block_index)
     call err_ctx%capture
-    call this%get_block_ptr(block_name, bptr)
-    call bptr%register_temporal_${loc}$_data(name, mold)
+    call this%blocks(b%index)%b%register_temporal_${loc}$_data(name, mold)
     call err_ctx%restore(0)
   end subroutine
 #:endfor
@@ -422,16 +400,18 @@ contains
   subroutine write_time_step_real64(this, time)
     class(vtkhdf_mb_file), intent(inout) :: this
     real(real64), intent(in) :: time
-    type(pdc_block), pointer :: b
     type(vtkhdf_h5e_context) :: err_ctx
+    integer :: j
     call err_ctx%capture
     INSIST(this%is_temporal)
     this%write_time_step_called = .true.
-    b => this%blocks
-    do while (associated(b))
-      if (b%b%nsteps >= 0) call b%b%write_time_step(time)
-      b => b%next
-    end do
+    if (allocated(this%blocks)) then
+      do j = 0, ubound(this%blocks,dim=1)
+        associate (b => this%blocks(j)%b)
+          if (b%nsteps >= 0) call b%write_time_step(time)
+        end associate
+      end do
+    end if
     call err_ctx%restore(0)
   end subroutine write_time_step_real64
 
@@ -442,47 +422,81 @@ contains
 #:for s in num_specs
 #:for d in data_specs
 
-  subroutine write_temporal_${loc}$_data_${s["kind"]}$_${d["suffix"]}$(this, block_name, name, array)
+  subroutine write_temporal_${loc}$_data_${s["kind"]}$_${d["suffix"]}$(this, b, name, array)
     class(vtkhdf_mb_file), intent(inout) :: this
-    character(*), intent(in) :: block_name, name
+    type(vtkhdf_block_handle), intent(in) :: b
+    character(*), intent(in) :: name
     ${s["decl"]}$, intent(in) :: array${d["array"]}$
-    type(vtkhdf_ug), pointer :: bptr
     type(vtkhdf_h5e_context) :: err_ctx
+    INSIST(b%index >= 0 .and. b%index < this%next_block_index)
     call err_ctx%capture
-    call this%get_block_ptr(block_name, bptr)
-    call bptr%write_temporal_${loc}$_data(name, array)
+    call this%blocks(b%index)%b%write_temporal_${loc}$_data(name, array)
     call err_ctx%restore(0)
   end subroutine
 #:endfor
 #:endfor
 #:endfor
 
-  !! This private procedure returns a pointer to the named block.
-  subroutine get_block_ptr(this, name, bptr)
-
-    class(vtkhdf_mb_file), intent(inout) :: this
+  !! Replace blacklisted characters in NAME with underscore.
+  !! This version replicates the behavior of vtkHDFWriter.
+  pure function sanitized_name(name) result(clean_name)
     character(*), intent(in) :: name
-    type(vtkhdf_ug), pointer, intent(out) :: bptr
-
-    type(pdc_block), pointer :: b
-
-    if (associated(this%last_block)) then
-      if (this%last_block%name == name) then
-        bptr => this%last_block%b
-        return
-      end if
-    end if
-
-    b => this%blocks
-    do while (associated(b))
-      if (b%name == name) exit
-      b => b%next
+    character(len_trim(name)) :: clean_name
+    character(*), parameter :: BLACKLIST = '/. '
+    integer :: n
+    clean_name = trim(name)
+    n = scan(clean_name, BLACKLIST)
+    do while (n > 0)
+      clean_name(n:n) = '_'
+      n = scan(clean_name, BLACKLIST)
     end do
+  end function
 
-    INSIST(this%ctx%global_all(associated(b)))
-    this%last_block => b
-    bptr => b%b
+!  !! Replace non-whitelisted characters in NAME with underscore.
+!  !! This version returns a name consisting of only alphanumeric
+!  !! characters plus underscore and hyphen.
+!  pure function sanitized_name(name) result(clean_name)
+!    character(*), intent(in) :: name
+!    character(len_trim(name)) :: clean_name
+!    character(*), parameter :: WHITELIST = &
+!        'abcdefghijklmnopqrstuvwxyz' // &
+!        'ABCDEFGHIJKLMNOPQRSTUVWXYZ' // &
+!        '0123456789' // '_-'
+!    integer :: n
+!    clean_name = trim(name)
+!    n = verify(clean_name, WHITELIST)
+!    do while (n > 0)
+!      clean_name(n:n) = '_'
+!      n = verify(clean_name, WHITELIST)
+!    end do
+!  end function
 
-  end subroutine get_block_ptr
+  !! Return a name that is distinct from the existing block names.
+  !! The returned name equals the input name (trimmed) if there are
+  !! no name clashes. Otherwise a unique name is generated by appending
+  !! a suffix of the form '_N' to the input name, where N is some
+  !! non-negative integer.
+
+  function unique_block_name(this, name) result(unique_name)
+    class(vtkhdf_mb_file), intent(in) :: this
+    character(*), intent(in) :: name
+    character(len_trim(name)) :: unique_name
+    integer :: n , suffix
+    character(8) :: string
+    n = 0 ! this%blocks uses 0-based indexing
+    suffix = 1
+    unique_name = trim(name)
+    if (.not.allocated(this%blocks)) return ! no existing names
+    do while (n <= ubound(this%blocks,dim=1))
+      if (unique_name == this%blocks(n)%name) then ! clash
+        write(string,'(i0)') suffix
+        unique_name = trim(name) // '_' // trim(string)
+        suffix = suffix + 1
+        n = 0 ! restart search from the beginning with new name
+      else ! no clash; move to next
+        n = n + 1
+      end if
+    end do
+  end function
 
 end module vtkhdf_mb_file_type
