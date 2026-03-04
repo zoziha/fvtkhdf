@@ -1,3 +1,4 @@
+[![CI](https://github.com/nncarlson/fvtkhdf/actions/workflows/ci.yml/badge.svg)](https://github.com/nncarlson/fvtkhdf/actions/workflows/ci.yml)
 [![Docs](https://github.com/nncarlson/fvtkhdf/actions/workflows/docs.yml/badge.svg)](https://nncarlson.github.io/fvtkhdf/)
 
 # fVTKHDF
