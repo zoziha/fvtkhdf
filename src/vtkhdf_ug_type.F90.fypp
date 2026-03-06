@@ -50,7 +50,7 @@ module vtkhdf_ug_type
     integer(hid_t) :: cogrp_id=H5I_INVALID_HID, pogrp_id=H5I_INVALID_HID
     type(temporal_data), pointer :: temporal_point_data => null()
     type(temporal_data), pointer :: temporal_cell_data => null()
-    type(temporal_data), pointer :: temporal_points => null()
+    type(temporal_data), pointer :: temporal_mesh_data => null()
   contains
     procedure :: init
     procedure :: close
@@ -106,7 +106,7 @@ contains
     type(vtkhdf_ug), intent(inout) :: this
     if (associated(this%temporal_cell_data)) deallocate(this%temporal_cell_data)
     if (associated(this%temporal_point_data)) deallocate(this%temporal_point_data)
-    if (associated(this%temporal_points)) deallocate(this%temporal_points)
+    if (associated(this%temporal_mesh_data)) deallocate(this%temporal_mesh_data)
     this%cogrp_id = H5I_INVALID_HID
     this%pogrp_id = H5I_INVALID_HID
     this%steps_id = H5I_INVALID_HID
@@ -217,13 +217,6 @@ contains
   !! conventional manner by the POINTS, CNODE, and XCNODE arrays. The
   !! additional array TYPES specifies the VTK cell types. This procedure
   !! must be called before any of the following procedures.
-
-  !! NB: Paraview and/or the VTKHDF reader currently has a problem handling
-  !! 0-sized parts (see https://gitlab.kitware.com/vtk/vtk/-/issues/19923).
-  !! As a workaround, we omit any empty part by not contributing anything
-  !! at all to the NumberOf* and Offsets datasets instead of the 0 we
-  !! normally would. Other datasets like Connectivity already contribute
-  !! nothing for empty parts.
 #:for r in real_specs
 #:for i in int_specs
 
@@ -266,8 +259,8 @@ contains
     !! Add to list PointData datasets
     allocate (new)
     new%name = 'Points'
-    new%next => this%temporal_points
-    this%temporal_points => new
+    new%next => this%temporal_mesh_data
+    this%temporal_mesh_data => new
 
   end subroutine write_mesh_topology_${r["kind"]}$_${i["kind"]}$
 #:endfor
@@ -276,6 +269,12 @@ contains
 #:for r in real_specs
 #:for i in int_specs
 
+  !! NB: Paraview and/or the VTKHDF reader currently has a problem handling
+  !! 0-sized parts (see https://gitlab.kitware.com/vtk/vtk/-/issues/19923).
+  !! As a workaround, we omit any empty part by not contributing anything
+  !! at all to the NumberOf* and Offsets datasets instead of the 0 we
+  !! normally would. Other datasets like Connectivity already contribute
+  !! nothing for empty parts.
   subroutine write_mesh_topology_impl_${r["kind"]}$_${i["kind"]}$(this, mold, cnode, xcnode, types)
 
     type(vtkhdf_ug), intent(inout) :: this
@@ -501,7 +500,7 @@ contains
     
     !! Cell and point data offsets for each of the temporal datasets for this timestep
     if (this%temporal_level >= VTKHDF_DEFORMED_MESH) then
-      tmp => this%temporal_points
+      tmp => this%temporal_mesh_data
       do while (associated(tmp))
         tmp%flag = .false.  ! dataset not yet written for this time step
         call h5_append_to_dataset(this%ctx, this%steps_id, 'PointOffsets', tmp%next_offset, root=0)
@@ -548,7 +547,7 @@ contains
     INSIST(dims(1) == 3)
     INSIST(dims(size(dims)) == this%nnode)
 
-    dset => this%temporal_points
+    dset => this%temporal_mesh_data
     do while (associated(dset))
       if (dset%name == 'Points') exit
       dset => dset%next
