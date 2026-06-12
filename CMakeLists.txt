@@ -2,6 +2,17 @@ cmake_minimum_required(VERSION 3.28..3.30)
 
 project(fVTKHDF VERSION 0.6.1 LANGUAGES Fortran C)
 
+# CMake does not currently provide the PIC flag for LLVMFlang on Linux.
+# LLVMFlang 23 requires it for shared-library builds; older tested versions
+# happen to link without it. Remove this once CMake handles LLVMFlang PIC.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
+   CMAKE_Fortran_COMPILER_ID STREQUAL "LLVMFlang" AND
+   CMAKE_Fortran_COMPILER_VERSION VERSION_GREATER_EQUAL 23 AND
+   CMAKE_Fortran_COMPILER_VERSION VERSION_LESS 24 AND
+   NOT CMAKE_Fortran_COMPILE_OPTIONS_PIC)
+  set(CMAKE_Fortran_COMPILE_OPTIONS_PIC "-fPIC")
+endif()
+
 # --- Options ---
 option(ENABLE_MPI "Enable MPI support" ON)
 option(USE_MPI_F08 "Expose mpi_f08 communicator overloads when MPI is enabled" ON)
