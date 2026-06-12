@@ -3,15 +3,15 @@ project(fvtkhdf_consumer LANGUAGES C Fortran)
 
 option(ENABLE_MPI "Build MPI consumer" ON)
 
-find_package(fVTKHDF CONFIG REQUIRED)
-
 if(ENABLE_MPI)
+  find_package(fVTKHDF CONFIG REQUIRED COMPONENTS MPI)
   find_package(MPI REQUIRED COMPONENTS Fortran C)
   add_executable(consumer consumer_mpi.F90)
   if(fVTKHDF_MPI_F08_SUPPORT)
     target_compile_definitions(consumer PRIVATE USE_MPI_F08)
   endif()
 else()
+  find_package(fVTKHDF CONFIG REQUIRED)
   add_executable(consumer consumer_serial.f90)
 endif()
 

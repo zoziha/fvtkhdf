@@ -122,6 +122,7 @@ find_dependency(HDF5 COMPONENTS C)
 # Capture build state
 set(fVTKHDF_MPI_SUPPORT @ENABLE_MPI@)
 set(fVTKHDF_MPI_F08_SUPPORT @FVTKHDF_MPI_F08_SUPPORT@)
+set(fVTKHDF_MPI_FOUND @ENABLE_MPI@)
 
 # If built with MPI, require MPI
 if(fVTKHDF_MPI_SUPPORT)
